@@ -1,6 +1,6 @@
 .{
     .name = .ztree_html,
-    .version = "0.0.0",
+    .version = "0.1.0",
     .fingerprint = 0x4312fb5bf692e2e4,
     .minimum_zig_version = "0.15.0",
     .paths = .{
