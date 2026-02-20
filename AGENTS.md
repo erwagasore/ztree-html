@@ -48,6 +48,12 @@ Use [Conventional Commits](https://www.conventionalcommits.org/).
 - CHANGELOG updated when user-facing.
 - No secrets committed.
 
+## Principles
+
+- **Pure functions whenever possible.** No hidden state, no side effects. Data in, output out. Not always achievable — e.g. `render` takes a writer, which is inherently effectful — but the default posture is pure.
+- **One way to do a thing.** No aliases, no convenience wrappers, no options struct. One function, minified output. Follows Zig's design philosophy.
+- **`anytype` writer.** The renderer writes to any writer, not a concrete type. Matches idiomatic Zig (`std.fmt`, `std.json`). Callers choose the destination.
+
 ## Orientation
 
 - **Entry point**: `src/root.zig` — public API.
