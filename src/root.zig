@@ -140,18 +140,20 @@ test "raw — no escaping" {
 // -- attributes --
 
 test "attribute value escaping — &, <, >, \" replaced" {
-    const node = ztree.element("div", &.{ztree.attr("title", "a & b < c > d \"e\"")}, &.{});
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const node = try ztree.element(a, "div", .{ .title = "a & b < c > d \"e\"" }, .{});
     const html = try renderToString(node);
     defer testing.allocator.free(html);
     try testing.expectEqualStrings("<div title=\"a &amp; b &lt; c &gt; d &quot;e&quot;\"></div>", html);
 }
 
 test "boolean attribute — key with no value" {
-    const node = ztree.closedElement("input", &.{
-        ztree.attr("type", "checkbox"),
-        ztree.attr("checked", null),
-        ztree.attr("disabled", null),
-    });
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const node = try ztree.closedElement(a, "input", .{ .type = "checkbox", .checked = {}, .disabled = {} });
     const html = try renderToString(node);
     defer testing.allocator.free(html);
     try testing.expectEqualStrings("<input type=\"checkbox\" checked disabled>", html);
@@ -160,21 +162,26 @@ test "boolean attribute — key with no value" {
 // -- void elements --
 
 test "all 13 void elements — no closing tag" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
     const void_tags = [_][]const u8{
         "area", "base", "br", "col", "embed", "hr", "img",
         "input", "link", "meta", "source", "track", "wbr",
     };
     for (void_tags) |tag| {
-        const html = try renderToString(ztree.closedElement(tag, &.{}));
+        const html = try renderToString(try ztree.closedElement(a, tag, .{}));
         defer testing.allocator.free(html);
-        // Must start with <tag> and have no closing tag
         try testing.expect(html.len > 2);
         try testing.expect(std.mem.indexOf(u8, html, "</") == null);
     }
 }
 
 test "void element ignores children" {
-    const html = try renderToString(ztree.element("br", &.{}, &.{ztree.text("oops")}));
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const html = try renderToString(try ztree.element(a, "br", .{}, .{ ztree.text("oops") }));
     defer testing.allocator.free(html);
     try testing.expectEqualStrings("<br>", html);
 }
@@ -182,28 +189,38 @@ test "void element ignores children" {
 // -- non-void elements --
 
 test "non-void empty element — always gets closing tag" {
-    const html = try renderToString(ztree.element("div", &.{}, &.{}));
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const html = try renderToString(try ztree.element(arena.allocator(), "div", .{}, .{}));
     defer testing.allocator.free(html);
     try testing.expectEqualStrings("<div></div>", html);
 }
 
 test "closedElement on non-void tag — still gets closing tag" {
-    const html = try renderToString(ztree.closedElement("script", &.{ztree.attr("src", "app.js")}));
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const html = try renderToString(try ztree.closedElement(arena.allocator(), "script", .{ .src = "app.js" }));
     defer testing.allocator.free(html);
     try testing.expectEqualStrings("<script src=\"app.js\"></script>", html);
 }
 
 test "element with attrs and children" {
-    const node = ztree.element("div", &.{ztree.attr("class", "card")}, &.{ztree.text("hello")});
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const node = try ztree.element(a, "div", .{ .class = "card" }, .{ ztree.text("hello") });
     const html = try renderToString(node);
     defer testing.allocator.free(html);
     try testing.expectEqualStrings("<div class=\"card\">hello</div>", html);
 }
 
 test "nested elements — correct open/close order" {
-    const node = ztree.element("ul", &.{}, &.{
-        ztree.element("li", &.{}, &.{ztree.text("one")}),
-        ztree.element("li", &.{}, &.{ztree.text("two")}),
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const node = try ztree.element(a, "ul", .{}, .{
+        try ztree.element(a, "li", .{}, .{ ztree.text("one") }),
+        try ztree.element(a, "li", .{}, .{ ztree.text("two") }),
     });
     const html = try renderToString(node);
     defer testing.allocator.free(html);
@@ -213,9 +230,12 @@ test "nested elements — correct open/close order" {
 // -- fragment --
 
 test "fragment — children rendered without wrapper" {
-    const node = ztree.fragment(&.{
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const node = try ztree.fragment(a, .{
         ztree.text("a"),
-        ztree.element("b", &.{}, &.{ztree.text("bold")}),
+        try ztree.element(a, "b", .{}, .{ ztree.text("bold") }),
         ztree.text("c"),
     });
     const html = try renderToString(node);
@@ -224,9 +244,12 @@ test "fragment — children rendered without wrapper" {
 }
 
 test "nested fragments — transparent" {
-    const node = ztree.fragment(&.{
-        ztree.fragment(&.{ztree.text("a")}),
-        ztree.fragment(&.{ztree.text("b")}),
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const node = try ztree.fragment(a, .{
+        try ztree.fragment(a, .{ ztree.text("a") }),
+        try ztree.fragment(a, .{ ztree.text("b") }),
     });
     const html = try renderToString(node);
     defer testing.allocator.free(html);
@@ -242,11 +265,14 @@ test "none — produces no output" {
 // -- mixed child types --
 
 test "element with all four child node types" {
-    const node = ztree.element("div", &.{}, &.{
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const node = try ztree.element(a, "div", .{}, .{
         ztree.text("escaped &"),
         ztree.raw("<br>"),
-        ztree.fragment(&.{ztree.text("frag")}),
-        ztree.element("span", &.{}, &.{ztree.text("child")}),
+        try ztree.fragment(a, .{ ztree.text("frag") }),
+        try ztree.element(a, "span", .{}, .{ ztree.text("child") }),
     });
     const html = try renderToString(node);
     defer testing.allocator.free(html);
@@ -258,20 +284,24 @@ test "element with all four child node types" {
 // proves arbitrary attr keys/values work — no per-framework tests needed.
 
 test "framework attrs — hx-*, x-*, @, :, data-*, v-*, _" {
-    const node = ztree.element("div", &.{
-        ztree.attr("hx-post", "/api"),
-        ztree.attr("hx-swap", "outerHTML"),
-        ztree.attr("hx-vals", "{\"a\":\"b&c\"}"),
-        ztree.attr("x-data", "{ open: false }"),
-        ztree.attr("x-show", "open"),
-        ztree.attr("x-transition", null),
-        ztree.attr("@click", "open = !open"),
-        ztree.attr(":class", "open && 'active'"),
-        ztree.attr("data-controller", "hello"),
-        ztree.attr("data-action", "click->hello#greet"),
-        ztree.attr("v-if", "show"),
-        ztree.attr("_", "on click toggle .on"),
-    }, &.{});
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Build the attrs slice for keys that aren't valid identifiers
+    const attrs = try a.alloc(Attr, 12);
+    attrs[0]  = ztree.attr("hx-post",          "/api");
+    attrs[1]  = ztree.attr("hx-swap",          "outerHTML");
+    attrs[2]  = ztree.attr("hx-vals",          "{\"a\":\"b&c\"}");
+    attrs[3]  = ztree.attr("x-data",           "{ open: false }");
+    attrs[4]  = ztree.attr("x-show",           "open");
+    attrs[5]  = ztree.attr("x-transition",     null);
+    attrs[6]  = ztree.attr("@click",           "open = !open");
+    attrs[7]  = ztree.attr(":class",           "open && 'active'");
+    attrs[8]  = ztree.attr("data-controller",  "hello");
+    attrs[9]  = ztree.attr("data-action",      "click->hello#greet");
+    attrs[10] = ztree.attr("v-if",             "show");
+    attrs[11] = ztree.attr("_",                "on click toggle .on");
+    const node = try ztree.element(a, "div", attrs, .{});
     const html = try renderToString(node);
     defer testing.allocator.free(html);
     try testing.expectEqualStrings(
@@ -296,22 +326,25 @@ test "framework attrs — hx-*, x-*, @, :, data-*, v-*, _" {
 // -- full page render --
 
 test "full page — doctype, head, body, mixed content" {
-    const page = ztree.fragment(&.{
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const page = try ztree.fragment(a, .{
         ztree.raw("<!DOCTYPE html>"),
-        ztree.element("html", &.{ztree.attr("lang", "en")}, &.{
-            ztree.element("head", &.{}, &.{
-                ztree.closedElement("meta", &.{ztree.attr("charset", "utf-8")}),
-                ztree.element("title", &.{}, &.{ztree.text("Test")}),
-                ztree.closedElement("link", &.{ ztree.attr("rel", "stylesheet"), ztree.attr("href", "s.css") }),
-                ztree.element("script", &.{ztree.attr("src", "app.js")}, &.{}),
-                ztree.element("style", &.{}, &.{ztree.raw("body{margin:0}")}),
+        try ztree.element(a, "html", .{ .lang = "en" }, .{
+            try ztree.element(a, "head", .{}, .{
+                try ztree.closedElement(a, "meta", .{ .charset = "utf-8" }),
+                try ztree.element(a, "title", .{}, .{ ztree.text("Test") }),
+                try ztree.closedElement(a, "link", .{ .rel = "stylesheet", .href = "s.css" }),
+                try ztree.element(a, "script", .{ .src = "app.js" }, .{}),
+                try ztree.element(a, "style", .{}, .{ ztree.raw("body{margin:0}") }),
             }),
-            ztree.element("body", &.{}, &.{
-                ztree.element("h1", &.{}, &.{ztree.text("A & B")}),
-                ztree.closedElement("hr", &.{}),
-                ztree.closedElement("img", &.{ ztree.attr("src", "pic.jpg"), ztree.attr("alt", "Photo") }),
+            try ztree.element(a, "body", .{}, .{
+                try ztree.element(a, "h1", .{}, .{ ztree.text("A & B") }),
+                try ztree.closedElement(a, "hr", .{}),
+                try ztree.closedElement(a, "img", .{ .src = "pic.jpg", .alt = "Photo" }),
                 ztree.raw("<!-- comment -->"),
-                ztree.element("script", &.{}, &.{ztree.raw("console.log('hi')")}),
+                try ztree.element(a, "script", .{}, .{ ztree.raw("console.log('hi')") }),
             }),
         }),
     });
