@@ -1,6 +1,7 @@
 # ztree-html — Design
 
-HTML renderer for ztree. Walks a `Node` tree and writes HTML.
+HTML renderer for ztree. Delegates tree traversal to `ztree.renderWalk`
+and implements HTML serialisation via callbacks.
 
 ---
 
@@ -18,6 +19,25 @@ const ztree_html = @import("ztree-html");
 // Write to any writer (file, buffer, socket):
 try ztree_html.render(page, writer);
 ```
+
+---
+
+## Architecture
+
+`render` creates an `HtmlRenderer` adapter and passes it to
+`ztree.renderWalk`. The walk lives in ztree — it handles recursion,
+fragment transparency, and child iteration. The adapter implements four
+callbacks:
+
+| Callback | Responsibility |
+|----------|----------------|
+| `elementOpen` | Write `<tag attrs>` via `writeOpenTag` |
+| `elementClose` | Write `</tag>` via `writeCloseTag` (skipped for void elements) |
+| `onText` | Write escaped text via `writeEscaped` |
+| `onRaw` | Write content as-is |
+
+The writing logic lives in pure standalone functions — the adapter is a
+thin shim with one-liner delegations.
 
 ---
 
@@ -72,9 +92,14 @@ Transparent — children are rendered directly, no wrapping tag.
 
 ## Design decisions
 
-**`anytype` writer.** Matches idiomatic Zig — `std.fmt.format`, `std.json.stringify`,
-and most std serializers accept `anytype` writer. Avoids forcing a specific
-writer type on callers.
+**`renderWalk` delegation.** Tree traversal is ztree's responsibility.
+ztree-html only owns HTML serialisation — escaping, void elements,
+open/close tags. The `HtmlRenderer` adapter is a thin shim connecting
+the two.
+
+**`anytype` writer.** Matches idiomatic Zig — `std.fmt.format`,
+`std.json.stringify`, and most std serializers accept `anytype` writer.
+Avoids forcing a specific writer type on callers.
 
 **Void element awareness.** HTML has strict rules about void elements.
 Emitting `<br></br>` is invalid. The renderer knows the 13 HTML5 void
@@ -99,7 +124,7 @@ ztree-html/
 ├── build.zig
 ├── build.zig.zon
 ├── src/
-│   └── root.zig     # render, renderAlloc, escaping — single file
+│   └── root.zig     # render, escaping, void elements — single file
 ├── DESIGN.md
 ├── README.md
 ├── AGENTS.md
@@ -109,30 +134,3 @@ ztree-html/
 
 Single source file. The renderer is small — splitting it adds indirection
 without value.
-
----
-
-## Checklist
-
-- [ ] Set up `build.zig` and `build.zig.zon` with ztree dependency
-- [ ] Implement text escaping (write escaped content to writer)
-- [ ] Implement attribute value escaping
-- [ ] Implement attribute rendering (key="value" and boolean)
-- [ ] Implement `render()` — recursive tree walk writing HTML
-
-- [ ] Define void element set
-- [ ] Test: text escaping — `&`, `<`, `>` replaced
-- [ ] Test: text with no special chars — passthrough
-- [ ] Test: attribute value escaping — `&`, `<`, `>`, `"` replaced
-- [ ] Test: boolean attribute — `disabled` with no value
-- [ ] Test: element with attrs and children
-- [ ] Test: void element — no closing tag
-- [ ] Test: non-void empty element — has closing tag
-- [ ] Test: nested elements — correct open/close order
-- [ ] Test: raw node — no escaping
-- [ ] Test: fragment — children rendered without wrapper
-- [ ] Test: none (empty fragment) — produces no output
-
-- [ ] Test: full page render — realistic tree produces valid HTML
-- [ ] Test: `closedElement` used on non-void tag — still gets closing tag
-- [ ] Test: `element` used on void tag — no closing tag

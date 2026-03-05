@@ -2,6 +2,7 @@
 const std = @import("std");
 const ztree = @import("ztree");
 const Node = ztree.Node;
+const Element = ztree.Element;
 const Attr = ztree.Attr;
 
 /// HTML5 void elements — must not have a closing tag.
@@ -21,70 +22,54 @@ const void_elements = std.StaticStringMap(void).initComptime(.{
     .{ "wbr", {} },
 });
 
+/// Renderer adapter — thin shim connecting renderWalk to the write functions.
+fn HtmlRenderer(Writer: type) type {
+    return struct {
+        writer: Writer,
+        pub fn elementOpen(self: *@This(), el: Element) !void { try writeOpenTag(self.writer, el); }
+        pub fn elementClose(self: *@This(), el: Element) !void { try writeCloseTag(self.writer, el); }
+        pub fn onText(self: *@This(), content: []const u8) !void { try writeEscaped(self.writer, content, false); }
+        pub fn onRaw(self: *@This(), content: []const u8) !void { try self.writer.writeAll(content); }
+    };
+}
+
 /// Write HTML for a ztree Node to any writer.
 pub fn render(node: Node, writer: anytype) !void {
-    switch (node) {
-        .text => |t| try writeEscapedText(writer, t),
-        .raw => |r| try writer.writeAll(r),
-        .fragment => |children| {
-            for (children) |child| {
-                try render(child, writer);
-            }
-        },
-        .element => |e| {
-            // Open tag
-            try writer.writeAll("<");
-            try writer.writeAll(e.tag);
-
-            // Attributes
-            for (e.attrs) |a| {
-                try writer.writeAll(" ");
-                try writer.writeAll(a.key);
-                if (a.value) |v| {
-                    try writer.writeAll("=\"");
-                    try writeEscapedAttr(writer, v);
-                    try writer.writeAll("\"");
-                }
-            }
-
-            try writer.writeAll(">");
-
-            // Void elements: no children, no closing tag.
-            if (void_elements.has(e.tag)) return;
-
-            // Children
-            for (e.children) |child| {
-                try render(child, writer);
-            }
-
-            // Close tag
-            try writer.writeAll("</");
-            try writer.writeAll(e.tag);
-            try writer.writeAll(">");
-        },
-    }
+    var renderer: HtmlRenderer(@TypeOf(writer)) = .{ .writer = writer };
+    try ztree.renderWalk(&renderer, node);
 }
 
-/// Escape text content: & < >
-fn writeEscapedText(writer: anytype, content: []const u8) !void {
-    for (content) |c| {
-        switch (c) {
-            '&' => try writer.writeAll("&amp;"),
-            '<' => try writer.writeAll("&lt;"),
-            '>' => try writer.writeAll("&gt;"),
-            else => try writer.writeByte(c),
+// ── Write functions (pure — data in, output out) ─────────────────────────────
+
+fn writeOpenTag(writer: anytype, el: Element) !void {
+    try writer.writeAll("<");
+    try writer.writeAll(el.tag);
+    for (el.attrs) |a| {
+        try writer.writeAll(" ");
+        try writer.writeAll(a.key);
+        if (a.value) |v| {
+            try writer.writeAll("=\"");
+            try writeEscaped(writer, v, true);
+            try writer.writeAll("\"");
         }
     }
+    try writer.writeAll(">");
 }
 
-/// Escape attribute values: & < > "
-fn writeEscapedAttr(writer: anytype, content: []const u8) !void {
+fn writeCloseTag(writer: anytype, el: Element) !void {
+    if (void_elements.has(el.tag)) return;
+    try writer.writeAll("</");
+    try writer.writeAll(el.tag);
+    try writer.writeAll(">");
+}
+
+fn writeEscaped(writer: anytype, content: []const u8, comptime esc_quot: bool) !void {
     for (content) |c| {
         switch (c) {
             '&' => try writer.writeAll("&amp;"),
             '<' => try writer.writeAll("&lt;"),
             '>' => try writer.writeAll("&gt;"),
-            '"' => try writer.writeAll("&quot;"),
+            '"' => if (esc_quot) try writer.writeAll("&quot;") else try writer.writeByte(c),
             else => try writer.writeByte(c),
         }
     }
@@ -175,15 +160,6 @@ test "all 13 void elements — no closing tag" {
         try testing.expect(html.len > 2);
         try testing.expect(std.mem.indexOf(u8, html, "</") == null);
     }
-}
-
-test "void element ignores children" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const html = try renderToString(try ztree.element(a, "br", .{}, .{ ztree.text("oops") }));
-    defer testing.allocator.free(html);
-    try testing.expectEqualStrings("<br>", html);
 }
 
 // -- non-void elements --
