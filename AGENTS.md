@@ -28,13 +28,14 @@ Use [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## Repo map
 
-- `LICENSE` — MIT licence
-- `.gitignore` — Zig build artefacts exclusions
-- `build.zig` — Zig build configuration
-- `build.zig.zon` — Zig package manifest (depends on ztree)
-- `DESIGN.md` — renderer design and checklist
 - `src/` — library source
-  - `root.zig` — public API: `render(node, writer)`
+  - `root.zig` — public API: `render(node, writer)`, HtmlRenderer adapter, escaping, void elements
+- `build.zig` — Zig build configuration
+- `build.zig.zon` — Zig package manifest (depends on ztree v0.4.0)
+- `DESIGN.md` — renderer architecture and rendering rules
+- `CHANGELOG.md` — release history
+- `LICENSE` — MIT licence
+- `.gitignore` — Zig build artefact exclusions
 
 ## Merge strategy
 
@@ -57,5 +58,5 @@ Use [Conventional Commits](https://www.conventionalcommits.org/).
 ## Orientation
 
 - **Entry point**: `src/root.zig` — public API.
-- **Domain**: HTML renderer for ztree. Walks a `Node` tree and writes HTML to any writer.
-- **Language**: Zig (0.15.x). Depends on `ztree` and `std`.
+- **Domain**: HTML renderer for ztree. Delegates tree traversal to `ztree.renderWalk` and implements HTML serialisation via callbacks.
+- **Language**: Zig (0.15.x). Depends on `ztree` (v0.4.0) and `std`.
