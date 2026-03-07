@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0] — 2026-03-06
+
+### Features
+
+- Upgrade ztree dependency to v0.9.0 — adopt tuple attrs for ergonomic runtime/dynamic attribute construction and closed-element semantics from `renderWalk`.
+
+### Other
+
+- Upgrade ztree dependency to v0.5.0.
+- Sync AGENTS.md repo-derived sections, add docs/index.md.
+
 ## [0.2.0] — 2026-03-05
 
 ### Breaking Changes
