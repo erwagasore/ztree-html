@@ -3,7 +3,6 @@ const std = @import("std");
 const ztree = @import("ztree");
 const Node = ztree.Node;
 const Element = ztree.Element;
-const Attr = ztree.Attr;
 
 /// HTML5 void elements — must not have a closing tag.
 const void_elements = std.StaticStringMap(void).initComptime(.{
@@ -172,12 +171,12 @@ test "non-void empty element — always gets closing tag" {
     try testing.expectEqualStrings("<div></div>", html);
 }
 
-test "closedElement on non-void tag — still gets closing tag" {
+test "closedElement on non-void tag — no closing tag (closed semantics)" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const html = try renderToString(try ztree.closedElement(arena.allocator(), "script", .{ .src = "app.js" }));
     defer testing.allocator.free(html);
-    try testing.expectEqualStrings("<script src=\"app.js\"></script>", html);
+    try testing.expectEqualStrings("<script src=\"app.js\">", html);
 }
 
 test "element with attrs and children" {
@@ -263,21 +262,21 @@ test "framework attrs — hx-*, x-*, @, :, data-*, v-*, _" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    // Build the attrs slice for keys that aren't valid identifiers
-    const attrs = try a.alloc(Attr, 12);
-    attrs[0]  = ztree.attr("hx-post",          "/api");
-    attrs[1]  = ztree.attr("hx-swap",          "outerHTML");
-    attrs[2]  = ztree.attr("hx-vals",          "{\"a\":\"b&c\"}");
-    attrs[3]  = ztree.attr("x-data",           "{ open: false }");
-    attrs[4]  = ztree.attr("x-show",           "open");
-    attrs[5]  = ztree.attr("x-transition",     null);
-    attrs[6]  = ztree.attr("@click",           "open = !open");
-    attrs[7]  = ztree.attr(":class",           "open && 'active'");
-    attrs[8]  = ztree.attr("data-controller",  "hello");
-    attrs[9]  = ztree.attr("data-action",      "click->hello#greet");
-    attrs[10] = ztree.attr("v-if",             "show");
-    attrs[11] = ztree.attr("_",                "on click toggle .on");
-    const node = try ztree.element(a, "div", attrs, .{});
+    // Tuple attrs — runtime keys via ztree.attr(), no manual alloc needed
+    const node = try ztree.element(a, "div", .{
+        ztree.attr("hx-post",          "/api"),
+        ztree.attr("hx-swap",          "outerHTML"),
+        ztree.attr("hx-vals",          "{\"a\":\"b&c\"}"),
+        ztree.attr("x-data",           "{ open: false }"),
+        ztree.attr("x-show",           "open"),
+        ztree.attr("x-transition",     null),
+        ztree.attr("@click",           "open = !open"),
+        ztree.attr(":class",           "open && 'active'"),
+        ztree.attr("data-controller",  "hello"),
+        ztree.attr("data-action",      "click->hello#greet"),
+        ztree.attr("v-if",             "show"),
+        ztree.attr("_",                "on click toggle .on"),
+    }, .{});
     const html = try renderToString(node);
     defer testing.allocator.free(html);
     try testing.expectEqualStrings(
