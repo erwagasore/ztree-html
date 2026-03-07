@@ -47,10 +47,14 @@ thin shim with one-liner delegations.
 
 - Open tag: `<tag attrs>`
 - Close tag: `</tag>`
-- Void elements (`br`, `hr`, `img`, `meta`, etc.) never get a closing tag,
-  regardless of whether `element()` or `closedElement()` was used.
-- Non-void elements always get a closing tag, even when children is empty:
-  `<div></div>`, `<script src="app.js"></script>`.
+- Closed elements (`closedElement()`) get an open tag only — `renderWalk`
+  skips children and never calls `elementClose`. Use for void elements
+  and any element that should have no closing tag.
+- Non-closed elements (`element()`) always get both open and close tags,
+  even when children is empty: `<div></div>`.
+- Void elements (`br`, `hr`, `img`, `meta`, etc.) are additionally guarded
+  in `writeCloseTag` — if `element()` is used on a void tag,
+  `elementClose` is called but the close tag is suppressed.
 
 ### Void elements (HTML5)
 
@@ -102,10 +106,11 @@ the two.
 Avoids forcing a specific writer type on callers.
 
 **Void element awareness.** HTML has strict rules about void elements.
-Emitting `<br></br>` is invalid. The renderer knows the 13 HTML5 void
-elements and handles them correctly regardless of how the node was
-constructed. This is HTML-specific knowledge that belongs here, not in ztree
-core.
+Emitting `<br></br>` is invalid. Since ztree v0.7.0, `renderWalk` skips
+`elementClose` for closed elements — so properly constructed trees
+(`closedElement("br", ...)`) never reach `writeCloseTag`. The void element
+map remains as a safety net: if someone uses `element("br", ...)` instead,
+`elementClose` is called but the close tag is suppressed.
 
 **No pretty-printing.** Minified output only. Indentation is a presentation
 concern — add it in a separate pass or a different renderer if needed. One
