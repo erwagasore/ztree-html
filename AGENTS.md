@@ -31,7 +31,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/).
 - `src/` — library source
   - `root.zig` — public API: `render(node, writer)`, HtmlRenderer adapter, escaping, void elements
 - `build.zig` — Zig build configuration
-- `build.zig.zon` — Zig package manifest (depends on ztree v1.0.0)
+- `build.zig.zon` — Zig package manifest (depends on ztree v1.2.0)
 - `DESIGN.md` — renderer architecture and rendering rules
 - `CHANGELOG.md` — release history
 - `LICENSE` — MIT licence
