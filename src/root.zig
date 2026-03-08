@@ -25,7 +25,7 @@ const void_elements = std.StaticStringMap(void).initComptime(.{
 fn HtmlRenderer(Writer: type) type {
     return struct {
         writer: Writer,
-        pub fn elementOpen(self: *@This(), el: Element) !void { try writeOpenTag(self.writer, el); }
+        pub fn elementOpen(self: *@This(), el: Element) !ztree.WalkAction { try writeOpenTag(self.writer, el); return .@"continue"; }
         pub fn elementClose(self: *@This(), el: Element) !void { try writeCloseTag(self.writer, el); }
         pub fn onText(self: *@This(), content: []const u8) !void { try writeEscaped(self.writer, content, false); }
         pub fn onRaw(self: *@This(), content: []const u8) !void { try self.writer.writeAll(content); }

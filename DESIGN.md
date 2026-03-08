@@ -31,7 +31,7 @@ callbacks:
 
 | Callback | Responsibility |
 |----------|----------------|
-| `elementOpen` | Write `<tag attrs>` via `writeOpenTag` |
+| `elementOpen` | Write `<tag attrs>` via `writeOpenTag`, return `.@"continue"` |
 | `elementClose` | Write `</tag>` via `writeCloseTag` (skipped for void elements) |
 | `onText` | Write escaped text via `writeEscaped` |
 | `onRaw` | Write content as-is |
