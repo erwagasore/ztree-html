@@ -2,6 +2,8 @@
 
 HTML renderer for [ztree](https://github.com/erwagasore/ztree). One function — walks a tree, writes HTML.
 
+Requires Zig 0.16.0 or newer and ztree 2.x. Rendering streams directly to the caller's writer, does not allocate, and works with trees produced by `ztree.TreeBuilder`.
+
 ## Install
 
 ```bash
@@ -21,6 +23,7 @@ my_module.addImport("ztree-html", ztree_html_dep.module("ztree-html"));
 ## Usage
 
 ```zig
+const std = @import("std");
 const ztree = @import("ztree");
 const ztree_html = @import("ztree-html");
 
@@ -37,9 +40,17 @@ const page = try ztree.fragment(a, .{
     }),
 });
 
-// Write to any writer (file, socket, buffer):
-try ztree_html.render(page, writer);
+// Write to any Zig 0.16 std.Io.Writer (file, socket, buffer):
+var out: std.Io.Writer.Allocating = .init(a);
+defer out.deinit();
+
+try ztree_html.render(page, &out.writer);
+const html = try out.toOwnedSlice();
+defer a.free(html);
 ```
+
+`render` does not flush the writer. If you pass a buffered file/socket writer,
+flush it after rendering when you need the bytes committed.
 
 Output:
 

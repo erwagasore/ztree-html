@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Change `render` to accept `*std.Io.Writer` and return `std.Io.Writer.Error!void`, adopting Zig 0.16's IO interface everywhere.
+
+### Changed
+
+- Require Zig 0.16.0 or newer.
+- Upgrade ztree dependency from v1.2.0 to v2.0.0.
+- Optimize tag writing and HTML escaping with Zig 0.16 `std.Io.Writer.writeVecAll` to reduce write calls.
+- Align renderer structure and producer-interop coverage with ztree-md patterns.
+
 ### Other
 
 - Upgrade ztree dependency from v1.0.0 to v1.2.0.

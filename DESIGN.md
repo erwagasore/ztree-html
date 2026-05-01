@@ -11,13 +11,15 @@ One function.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `render` | `(node: Node, writer: anytype) !void` | Write HTML to any writer. |
+| `render` | `(node: Node, writer: *std.Io.Writer) std.Io.Writer.Error!void` | Write HTML to a Zig 0.16 writer. |
+
+Requires Zig 0.16.0 or newer and ztree 2.x.
 
 ```zig
 const ztree_html = @import("ztree-html");
 
-// Write to any writer (file, buffer, socket):
-try ztree_html.render(page, writer);
+// Write to any Zig 0.16 std.Io.Writer (file, buffer, socket):
+try ztree_html.render(page, &writer);
 ```
 
 ---
@@ -37,7 +39,9 @@ callbacks:
 | `onRaw` | Write content as-is |
 
 The writing logic lives in pure standalone functions — the adapter is a
-thin shim with one-liner delegations.
+thin shim with one-liner delegations. All output goes through Zig 0.16's
+`std.Io.Writer` interface. Tests include `ztree.TreeBuilder` producer interop,
+matching the coverage style used by sibling renderers such as ztree-md.
 
 ---
 
@@ -101,12 +105,18 @@ ztree-html only owns HTML serialisation — escaping, void elements,
 open/close tags. The `HtmlRenderer` adapter is a thin shim connecting
 the two.
 
-**`anytype` writer.** Matches idiomatic Zig — `std.fmt.format`,
-`std.json.stringify`, and most std serializers accept `anytype` writer.
-Avoids forcing a specific writer type on callers.
+**Zig 0.16 `std.Io.Writer`.** The public renderer accepts `*std.Io.Writer`
+directly. This uses Zig's new IO abstraction consistently instead of accepting
+legacy writer shapes through `anytype`. Callers choose the sink — file, socket,
+fixed buffer, allocating writer — and pass its `std.Io.Writer` pointer.
+
+**No renderer-owned allocations.** `render` streams directly to the caller's
+writer. Tag boundaries and escaped spans use `writeVecAll` where useful, so
+plain text becomes one write and escaped text avoids byte-by-byte output.
+`render` does not flush; flushing is owned by the caller that owns the writer.
 
 **Void element awareness.** HTML has strict rules about void elements.
-Emitting `<br></br>` is invalid. Since ztree v0.7.0, `renderWalk` skips
+Emitting `<br></br>` is invalid. ztree 2.x `renderWalk` skips
 `elementClose` for closed elements — so properly constructed trees
 (`closedElement("br", ...)`) never reach `writeCloseTag`. The void element
 map remains as a safety net: if someone uses `element("br", ...)` instead,
