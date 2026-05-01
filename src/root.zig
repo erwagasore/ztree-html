@@ -1,8 +1,21 @@
 /// ztree-html — HTML renderer for ztree.
+///
+/// Architecture:
+///   render()     — public entry point, delegates traversal to ztree.renderWalk.
+///   HtmlRenderer — struct implementing the renderWalk protocol:
+///                    elementOpen / elementClose / onText / onRaw.
+///   Leaf writers — pure helpers that serialize tags and escaped text to
+///                    Zig 0.16's std.Io.Writer.
 const std = @import("std");
 const ztree = @import("ztree");
 const Node = ztree.Node;
 const Element = ztree.Element;
+const WalkAction = ztree.WalkAction;
+const Writer = std.Io.Writer;
+
+// ---------------------------------------------------------------------------
+// Lookup tables
+// ---------------------------------------------------------------------------
 
 /// HTML5 void elements — must not have a closing tag.
 const void_elements = std.StaticStringMap(void).initComptime(.{
@@ -21,56 +34,98 @@ const void_elements = std.StaticStringMap(void).initComptime(.{
     .{ "wbr", {} },
 });
 
-/// Renderer adapter — thin shim connecting renderWalk to the write functions.
-fn HtmlRenderer(Writer: type) type {
-    return struct {
-        writer: Writer,
-        pub fn elementOpen(self: *@This(), el: Element) !ztree.WalkAction { try writeOpenTag(self.writer, el); return .@"continue"; }
-        pub fn elementClose(self: *@This(), el: Element) !void { try writeCloseTag(self.writer, el); }
-        pub fn onText(self: *@This(), content: []const u8) !void { try writeEscaped(self.writer, content, false); }
-        pub fn onRaw(self: *@This(), content: []const u8) !void { try self.writer.writeAll(content); }
-    };
-}
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
-/// Write HTML for a ztree Node to any writer.
-pub fn render(node: Node, writer: anytype) !void {
-    var renderer: HtmlRenderer(@TypeOf(writer)) = .{ .writer = writer };
+/// Write HTML for a ztree Node to a Zig 0.16 `std.Io.Writer`.
+///
+/// Rendering performs no heap allocation and does not flush. The caller owns
+/// the writer and decides when buffered output should be flushed.
+pub fn render(node: Node, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    var renderer: HtmlRenderer = .{ .writer = writer };
     try ztree.renderWalk(&renderer, node);
 }
 
-// ── Write functions (pure — data in, output out) ─────────────────────────────
+// ---------------------------------------------------------------------------
+// Renderer — struct implementing the ztree renderWalk protocol
+// ---------------------------------------------------------------------------
 
-fn writeOpenTag(writer: anytype, el: Element) !void {
-    try writer.writeAll("<");
-    try writer.writeAll(el.tag);
+/// Renderer adapter — thin shim connecting renderWalk to the write functions.
+const HtmlRenderer = struct {
+    writer: *Writer,
+
+    pub fn elementOpen(self: *HtmlRenderer, el: Element) Writer.Error!WalkAction {
+        try writeOpenTag(self.writer, el);
+        return .@"continue";
+    }
+
+    pub fn elementClose(self: *HtmlRenderer, el: Element) Writer.Error!void {
+        try writeCloseTag(self.writer, el);
+    }
+
+    pub fn onText(self: *HtmlRenderer, content: []const u8) Writer.Error!void {
+        try writeEscaped(self.writer, content, false);
+    }
+
+    pub fn onRaw(self: *HtmlRenderer, content: []const u8) Writer.Error!void {
+        try self.writer.writeAll(content);
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Leaf writers — write output, never recurse into the tree
+// ---------------------------------------------------------------------------
+
+fn writeOpenTag(writer: *Writer, el: Element) Writer.Error!void {
+    var tag_open = [_][]const u8{ "<", el.tag };
+    try writer.writeVecAll(&tag_open);
+
     for (el.attrs) |a| {
-        try writer.writeAll(" ");
-        try writer.writeAll(a.key);
         if (a.value) |v| {
-            try writer.writeAll("=\"");
+            var attr_open = [_][]const u8{ " ", a.key, "=\"" };
+            try writer.writeVecAll(&attr_open);
             try writeEscaped(writer, v, true);
             try writer.writeAll("\"");
+        } else {
+            var attr = [_][]const u8{ " ", a.key };
+            try writer.writeVecAll(&attr);
         }
     }
+
     try writer.writeAll(">");
 }
 
-fn writeCloseTag(writer: anytype, el: Element) !void {
+fn writeCloseTag(writer: *Writer, el: Element) Writer.Error!void {
     if (void_elements.has(el.tag)) return;
-    try writer.writeAll("</");
-    try writer.writeAll(el.tag);
-    try writer.writeAll(">");
+
+    var tag_close = [_][]const u8{ "</", el.tag, ">" };
+    try writer.writeVecAll(&tag_close);
 }
 
-fn writeEscaped(writer: anytype, content: []const u8, comptime esc_quot: bool) !void {
-    for (content) |c| {
-        switch (c) {
-            '&' => try writer.writeAll("&amp;"),
-            '<' => try writer.writeAll("&lt;"),
-            '>' => try writer.writeAll("&gt;"),
-            '"' => if (esc_quot) try writer.writeAll("&quot;") else try writer.writeByte(c),
-            else => try writer.writeByte(c),
+fn writeEscaped(writer: *Writer, content: []const u8, comptime escape_quote: bool) Writer.Error!void {
+    var unescaped_start: usize = 0;
+
+    for (content, 0..) |c, i| {
+        const replacement: []const u8 = switch (c) {
+            '&' => "&amp;",
+            '<' => "&lt;",
+            '>' => "&gt;",
+            '"' => if (escape_quote) "&quot;" else continue,
+            else => continue,
+        };
+
+        if (unescaped_start < i) {
+            var escaped = [_][]const u8{ content[unescaped_start..i], replacement };
+            try writer.writeVecAll(&escaped);
+        } else {
+            try writer.writeAll(replacement);
         }
+        unescaped_start = i + 1;
+    }
+
+    if (unescaped_start < content.len) {
+        try writer.writeAll(content[unescaped_start..]);
     }
 }
 
@@ -79,12 +134,32 @@ fn writeEscaped(writer: anytype, content: []const u8, comptime esc_quot: bool) !
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
+const TreeBuilder = ztree.TreeBuilder;
 
 fn renderToString(node: Node) ![]const u8 {
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    var aw: Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
     try render(node, &aw.writer);
-    var al = aw.toArrayList();
-    return al.toOwnedSlice(testing.allocator);
+    return aw.toOwnedSlice();
+}
+
+// -- writer integration --
+
+test "render — fixed writer streams without allocation" {
+    var buffer: [64]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    try render(ztree.text("a & b < c"), &writer);
+
+    try testing.expectEqualStrings("a &amp; b &lt; c", writer.buffered());
+}
+
+test "render — fixed writer reports WriteFailed when full" {
+    var buffer: [4]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    try testing.expectError(error.WriteFailed, render(ztree.text("hello"), &writer));
 }
 
 // -- text --
@@ -150,7 +225,7 @@ test "all 13 void elements — no closing tag" {
     defer arena.deinit();
     const a = arena.allocator();
     const void_tags = [_][]const u8{
-        "area", "base", "br", "col", "embed", "hr", "img",
+        "area",  "base", "br",   "col",    "embed", "hr",  "img",
         "input", "link", "meta", "source", "track", "wbr",
     };
     for (void_tags) |tag| {
@@ -183,7 +258,7 @@ test "element with attrs and children" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const node = try ztree.element(a, "div", .{ .class = "card" }, .{ ztree.text("hello") });
+    const node = try ztree.element(a, "div", .{ .class = "card" }, .{ztree.text("hello")});
     const html = try renderToString(node);
     defer testing.allocator.free(html);
     try testing.expectEqualStrings("<div class=\"card\">hello</div>", html);
@@ -194,8 +269,8 @@ test "nested elements — correct open/close order" {
     defer arena.deinit();
     const a = arena.allocator();
     const node = try ztree.element(a, "ul", .{}, .{
-        try ztree.element(a, "li", .{}, .{ ztree.text("one") }),
-        try ztree.element(a, "li", .{}, .{ ztree.text("two") }),
+        try ztree.element(a, "li", .{}, .{ztree.text("one")}),
+        try ztree.element(a, "li", .{}, .{ztree.text("two")}),
     });
     const html = try renderToString(node);
     defer testing.allocator.free(html);
@@ -210,7 +285,7 @@ test "fragment — children rendered without wrapper" {
     const a = arena.allocator();
     const node = try ztree.fragment(a, .{
         ztree.text("a"),
-        try ztree.element(a, "b", .{}, .{ ztree.text("bold") }),
+        try ztree.element(a, "b", .{}, .{ztree.text("bold")}),
         ztree.text("c"),
     });
     const html = try renderToString(node);
@@ -223,8 +298,8 @@ test "nested fragments — transparent" {
     defer arena.deinit();
     const a = arena.allocator();
     const node = try ztree.fragment(a, .{
-        try ztree.fragment(a, .{ ztree.text("a") }),
-        try ztree.fragment(a, .{ ztree.text("b") }),
+        try ztree.fragment(a, .{ztree.text("a")}),
+        try ztree.fragment(a, .{ztree.text("b")}),
     });
     const html = try renderToString(node);
     defer testing.allocator.free(html);
@@ -237,6 +312,26 @@ test "none — produces no output" {
     try testing.expectEqualStrings("", html);
 }
 
+// -- producer interop --
+
+test "TreeBuilder interop — multiple text/raw events and closed elements" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var b = TreeBuilder.init(arena.allocator());
+    try b.raw("<!DOCTYPE html>");
+    try b.open("p", .{ .class = "intro" });
+    try b.text("A & ");
+    try b.text("<B>");
+    try b.raw("<br>");
+    try b.close();
+    try b.closedElement("hr", .{});
+
+    const html = try renderToString(try b.finish());
+    defer testing.allocator.free(html);
+    try testing.expectEqualStrings("<!DOCTYPE html><p class=\"intro\">A &amp; &lt;B&gt;<br></p><hr>", html);
+}
+
 // -- mixed child types --
 
 test "element with all four child node types" {
@@ -246,8 +341,8 @@ test "element with all four child node types" {
     const node = try ztree.element(a, "div", .{}, .{
         ztree.text("escaped &"),
         ztree.raw("<br>"),
-        try ztree.fragment(a, .{ ztree.text("frag") }),
-        try ztree.element(a, "span", .{}, .{ ztree.text("child") }),
+        try ztree.fragment(a, .{ztree.text("frag")}),
+        try ztree.element(a, "span", .{}, .{ztree.text("child")}),
     });
     const html = try renderToString(node);
     defer testing.allocator.free(html);
@@ -264,18 +359,18 @@ test "framework attrs — hx-*, x-*, @, :, data-*, v-*, _" {
     const a = arena.allocator();
     // Tuple attrs — runtime keys via ztree.attr(), no manual alloc needed
     const node = try ztree.element(a, "div", .{
-        ztree.attr("hx-post",          "/api"),
-        ztree.attr("hx-swap",          "outerHTML"),
-        ztree.attr("hx-vals",          "{\"a\":\"b&c\"}"),
-        ztree.attr("x-data",           "{ open: false }"),
-        ztree.attr("x-show",           "open"),
-        ztree.attr("x-transition",     null),
-        ztree.attr("@click",           "open = !open"),
-        ztree.attr(":class",           "open && 'active'"),
-        ztree.attr("data-controller",  "hello"),
-        ztree.attr("data-action",      "click->hello#greet"),
-        ztree.attr("v-if",             "show"),
-        ztree.attr("_",                "on click toggle .on"),
+        ztree.attr("hx-post", "/api"),
+        ztree.attr("hx-swap", "outerHTML"),
+        ztree.attr("hx-vals", "{\"a\":\"b&c\"}"),
+        ztree.attr("x-data", "{ open: false }"),
+        ztree.attr("x-show", "open"),
+        ztree.attr("x-transition", null),
+        ztree.attr("@click", "open = !open"),
+        ztree.attr(":class", "open && 'active'"),
+        ztree.attr("data-controller", "hello"),
+        ztree.attr("data-action", "click->hello#greet"),
+        ztree.attr("v-if", "show"),
+        ztree.attr("_", "on click toggle .on"),
     }, .{});
     const html = try renderToString(node);
     defer testing.allocator.free(html);
@@ -309,17 +404,17 @@ test "full page — doctype, head, body, mixed content" {
         try ztree.element(a, "html", .{ .lang = "en" }, .{
             try ztree.element(a, "head", .{}, .{
                 try ztree.closedElement(a, "meta", .{ .charset = "utf-8" }),
-                try ztree.element(a, "title", .{}, .{ ztree.text("Test") }),
+                try ztree.element(a, "title", .{}, .{ztree.text("Test")}),
                 try ztree.closedElement(a, "link", .{ .rel = "stylesheet", .href = "s.css" }),
                 try ztree.element(a, "script", .{ .src = "app.js" }, .{}),
-                try ztree.element(a, "style", .{}, .{ ztree.raw("body{margin:0}") }),
+                try ztree.element(a, "style", .{}, .{ztree.raw("body{margin:0}")}),
             }),
             try ztree.element(a, "body", .{}, .{
-                try ztree.element(a, "h1", .{}, .{ ztree.text("A & B") }),
+                try ztree.element(a, "h1", .{}, .{ztree.text("A & B")}),
                 try ztree.closedElement(a, "hr", .{}),
                 try ztree.closedElement(a, "img", .{ .src = "pic.jpg", .alt = "Photo" }),
                 ztree.raw("<!-- comment -->"),
-                try ztree.element(a, "script", .{}, .{ ztree.raw("console.log('hi')") }),
+                try ztree.element(a, "script", .{}, .{ztree.raw("console.log('hi')")}),
             }),
         }),
     });
