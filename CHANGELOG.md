@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-05-02
+
 ### Other
 
 - Upgrade ztree dependency to v2.1.0.
