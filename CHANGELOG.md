@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Other
+
+- Upgrade ztree dependency to v2.1.0.
+- Document renderer safety boundaries for raw nodes, tag names, and attribute names.
+
 ## [1.0.0] — 2026-05-01
 
 ### Breaking Changes

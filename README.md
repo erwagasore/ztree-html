@@ -52,6 +52,12 @@ defer a.free(html);
 `render` does not flush the writer. If you pass a buffered file/socket writer,
 flush it after rendering when you need the bytes committed.
 
+## Safety
+
+Text content and attribute values are escaped. Raw nodes, tag names, and
+attribute names are written as provided. Use trusted tag and attribute names;
+validation is outside this renderer's scope.
+
 Output:
 
 ```html
