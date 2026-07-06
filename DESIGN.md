@@ -1,35 +1,56 @@
 # ztree-html — Design
 
-HTML renderer for ztree. Delegates tree traversal to `ztree.renderWalk`
-and implements HTML serialisation via callbacks.
+HTML renderer for ztree. Delegates tree traversal to `ztree.renderWalk`, implements HTML serialisation via callbacks, and provides a small allocator-bound builder for ergonomic HTML `ztree.Node` construction.
 
 ---
 
 ## API
 
-One function.
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
+| API | Signature | Description |
+|-----|-----------|-------------|
+| `init` | `(allocator: std.mem.Allocator) Html` | Create an allocator-bound HTML builder. |
 | `render` | `(node: Node, writer: *std.Io.Writer) std.Io.Writer.Error!void` | Write HTML to a Zig 0.16 writer. |
+| `doctype` | `Node` | Raw `<!DOCTYPE html>` node. |
+| `ztree` | module | Re-exported ztree dependency used by ztree-html. |
+
+`Html` methods:
+
+| Method | Description |
+|--------|-------------|
+| `el(tag, attrs, children)` | Allocating element constructor using the bound allocator. HTML void elements are closed automatically. |
+| `fragment(children)` | Allocating fragment constructor using the bound allocator. |
+| `document(attrs, children)` | `doctype` plus `<html attrs>children</html>`. |
 
 Requires Zig 0.16.0 or newer and ztree 2.x.
 
 ```zig
-const ztree_html = @import("ztree-html");
+const html = @import("ztree-html");
+const ztree = html.ztree;
 
-// Write to any Zig 0.16 std.Io.Writer (file, buffer, socket):
-try ztree_html.render(page, &writer);
+const h = html.init(req.arena);
+const page = try h.document(.{ .lang = "en" }, .{
+    try h.el("head", .{}, .{
+        try h.el("meta", .{ .charset = "utf-8" }, .{}),
+        try h.el("title", .{}, .{ztree.text("Rwagasore")}),
+    }),
+    try h.el("body", .{}, .{
+        try h.el("h1", .{}, .{ztree.text("Rwagasore")}),
+    }),
+});
+try html.render(page, &writer);
+```
+
+The builder returns ordinary `ztree.Node` values from the re-exported `html.ztree` module. Builder allocations are caller-owned; use an arena or request-scoped allocator when building a page tree and release that region after rendering. Existing ztree APIs remain supported:
+
+```zig
+try html.render(ztree_node, &writer);
 ```
 
 ---
 
 ## Architecture
 
-`render` creates an `HtmlRenderer` adapter and passes it to
-`ztree.renderWalk`. The walk lives in ztree — it handles recursion,
-fragment transparency, and child iteration. The adapter implements four
-callbacks:
+`render` creates an `HtmlRenderer` adapter and passes it to `ztree.renderWalk`. The walk lives in ztree — it handles recursion, fragment transparency, and child iteration. The adapter implements four callbacks:
 
 | Callback | Responsibility |
 |----------|----------------|
@@ -38,10 +59,9 @@ callbacks:
 | `onText` | Write escaped text via `writeEscaped` |
 | `onRaw` | Write content as-is |
 
-The writing logic lives in pure standalone functions — the adapter is a
-thin shim with one-liner delegations. All output goes through Zig 0.16's
-`std.Io.Writer` interface. Tests include `ztree.TreeBuilder` producer interop,
-matching the coverage style used by sibling renderers such as ztree-md.
+The `Html` builder is intentionally thin. It binds an allocator once and delegates to ztree constructors. `el` chooses `ztree.closedElement` for HTML void elements and `ztree.element` otherwise. `document` allocates a two-node fragment containing `doctype` and an `html` element.
+
+The writing logic lives in pure standalone functions — the adapter is a thin shim with one-liner delegations. All output goes through Zig 0.16's `std.Io.Writer` interface.
 
 ---
 
@@ -51,19 +71,14 @@ matching the coverage style used by sibling renderers such as ztree-md.
 
 - Open tag: `<tag attrs>`
 - Close tag: `</tag>`
-- Closed elements (`closedElement()`) get an open tag only — `renderWalk`
-  skips children and never calls `elementClose`. Use for void elements
-  and any element that should have no closing tag.
-- Non-closed elements (`element()`) always get both open and close tags,
-  even when children is empty: `<div></div>`.
-- Void elements (`br`, `hr`, `img`, `meta`, etc.) are additionally guarded
-  in `writeCloseTag` — if `element()` is used on a void tag,
-  `elementClose` is called but the close tag is suppressed.
+- `Html.el` creates closed nodes automatically for HTML void elements (`meta`, `br`, `img`, etc.).
+- Pass `.{}` as children for void elements; children passed to `Html.el` for void tags are not rendered.
+- Non-void elements get both open and close tags, even when children is empty: `<div></div>`.
+- Void elements are additionally guarded in `writeCloseTag` — if a void tag reaches `elementClose`, the close tag is suppressed.
 
 ### Void elements (HTML5)
 
-`area`, `base`, `br`, `col`, `embed`, `hr`, `img`, `input`, `link`,
-`meta`, `source`, `track`, `wbr`
+`area`, `base`, `br`, `col`, `embed`, `hr`, `img`, `input`, `link`, `meta`, `source`, `track`, `wbr`
 
 ### Text
 
@@ -100,35 +115,25 @@ Transparent — children are rendered directly, no wrapping tag.
 
 ## Design decisions
 
-**`renderWalk` delegation.** Tree traversal is ztree's responsibility.
-ztree-html only owns HTML serialisation — escaping, void elements,
-open/close tags. The `HtmlRenderer` adapter is a thin shim connecting
-the two.
+**Allocator-bound builder instead of app-side helpers.** Zig cannot provide Maud's `html!` macro syntax. Binding the allocator once gives the practical ergonomic win while keeping construction honest: callers write `h.el(...)` instead of passing `allocator` into every ztree constructor.
 
-**Zig 0.16 `std.Io.Writer`.** The public renderer accepts `*std.Io.Writer`
-directly. This uses Zig's new IO abstraction consistently instead of accepting
-legacy writer shapes through `anytype`. Callers choose the sink — file, socket,
-fixed buffer, allocating writer — and pass its `std.Io.Writer` pointer.
+**One element constructor.** `Html.el` is the only allocator-bound element constructor. HTML void-element knowledge belongs to ztree-html, so callers do not have to choose between `element` and `closed` for normal HTML authoring.
 
-**No renderer-owned allocations.** `render` streams directly to the caller's
-writer. Tag boundaries and escaped spans use `writeVecAll` where useful, so
-plain text becomes one write and escaped text avoids byte-by-byte output.
-`render` does not flush; flushing is owned by the caller that owns the writer.
+**Builder returns ztree nodes.** The builder does not create a second markup type. It produces ordinary `ztree.Node` values, so natural ztree component composition remains intact.
 
-**Void element awareness.** HTML has strict rules about void elements.
-Emitting `<br></br>` is invalid. ztree 2.x `renderWalk` skips
-`elementClose` for closed elements — so properly constructed trees
-(`closedElement("br", ...)`) never reach `writeCloseTag`. The void element
-map remains as a safety net: if someone uses `element("br", ...)` instead,
-`elementClose` is called but the close tag is suppressed.
+**Caller-owned tree allocations.** `Html` binds, but does not own, an allocator. Constructed nodes may contain allocator-owned slices. ztree-html provides no recursive node destructor; callers should use an arena/region allocator for page construction or otherwise free owned ztree slices according to ztree's ownership rules.
 
-**No pretty-printing.** Minified output only. Indentation is a presentation
-concern — add it in a separate pass or a different renderer if needed. One
-way to do a thing.
+**Explicit fallibility.** `Html.el`, `fragment`, and `document` allocate, so they return `!Node`. The repeated `try` is the Zig cost of constructing real nodes eagerly rather than a separate no-allocation markup description.
 
-**No validation.** The renderer does not check whether tags or attributes
-are valid HTML. ztree-html renders what it's given. Validation is a separate
-concern.
+**`renderWalk` delegation.** Tree traversal is ztree's responsibility. ztree-html only owns HTML serialisation — escaping, void elements, open/close tags. The `HtmlRenderer` adapter connects the two.
+
+**Zig 0.16 `std.Io.Writer`.** The public renderer accepts `*std.Io.Writer` directly. Callers choose the sink — file, socket, fixed buffer, allocating writer — and pass its `std.Io.Writer` pointer.
+
+**No renderer-owned allocations.** `render` streams directly to the caller's writer. Tree construction may allocate before rendering; rendering itself does not allocate and does not flush.
+
+**No pretty-printing.** Minified output only. Indentation is a presentation concern — add it in a separate pass or a different renderer if needed.
+
+**No validation.** The renderer does not check whether arbitrary tags, attributes, or children are valid HTML. ztree-html renders what it's given, with HTML void tags constructed as closed elements by `Html.el`. Validation is a separate concern.
 
 ---
 
@@ -139,7 +144,7 @@ ztree-html/
 ├── build.zig
 ├── build.zig.zon
 ├── src/
-│   └── root.zig     # render, escaping, void elements — single file
+│   └── root.zig     # builder, render, escaping, void elements — single file
 ├── DESIGN.md
 ├── README.md
 ├── AGENTS.md
@@ -147,5 +152,4 @@ ztree-html/
 └── .gitignore
 ```
 
-Single source file. The renderer is small — splitting it adds indirection
-without value.
+Single source file. The renderer is small — splitting it adds indirection without value.
