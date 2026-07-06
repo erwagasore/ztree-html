@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Features
+
+- Add `ztree_html.init(allocator)` for allocator-bound HTML tree construction (`el`, `fragment`, `document`) with automatic HTML void-element handling.
+- Add `doctype` for complete HTML document construction.
+- Re-export the ztree dependency as `ztree_html.ztree` so consumers do not need a separate ztree import for basic usage.
+
 ## [1.0.1] — 2026-05-02
 
 ### Other

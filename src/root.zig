@@ -1,17 +1,19 @@
 /// ztree-html — HTML renderer for ztree.
 ///
 /// Architecture:
+///   init()       — allocator-bound helper for ergonomic ztree.Node creation.
 ///   render()     — public entry point, delegates traversal to ztree.renderWalk.
 ///   HtmlRenderer — struct implementing the renderWalk protocol:
 ///                    elementOpen / elementClose / onText / onRaw.
 ///   Leaf writers — pure helpers that serialize tags and escaped text to
 ///                    Zig 0.16's std.Io.Writer.
 const std = @import("std");
-const ztree = @import("ztree");
+pub const ztree = @import("ztree");
 const Node = ztree.Node;
 const Element = ztree.Element;
 const WalkAction = ztree.WalkAction;
 const Writer = std.Io.Writer;
+const Allocator = std.mem.Allocator;
 
 // ---------------------------------------------------------------------------
 // Lookup tables
@@ -37,6 +39,52 @@ const void_elements = std.StaticStringMap(void).initComptime(.{
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+/// HTML document type declaration.
+pub const doctype: Node = ztree.raw("<!DOCTYPE html>");
+
+/// Create an allocator-bound HTML builder.
+pub fn init(allocator: Allocator) Html {
+    return .{ .allocator = allocator };
+}
+
+/// Allocator-bound helper for constructing ztree nodes for HTML output.
+///
+/// This keeps tree construction declarative while avoiding repeated allocator
+/// plumbing. HTML void elements are recognized automatically by `el`.
+pub const Html = struct {
+    allocator: Allocator,
+
+    /// Build an element node using this builder's allocator.
+    ///
+    /// HTML void elements (`meta`, `br`, `img`, etc.) are created as closed
+    /// nodes automatically. Pass `.{}` for their children; children passed to
+    /// void elements are not rendered.
+    pub fn el(self: Html, tag: []const u8, attrs: anytype, children: anytype) !Node {
+        if (void_elements.has(tag)) return ztree.closedElement(self.allocator, tag, attrs);
+        return ztree.element(self.allocator, tag, attrs, children);
+    }
+
+    /// Build a fragment using this builder's allocator.
+    pub fn fragment(self: Html, children: anytype) !Node {
+        return ztree.fragment(self.allocator, children);
+    }
+
+    /// Build a complete HTML document: doctype plus `<html attrs>children</html>`.
+    ///
+    /// The two-root fragment slice (doctype, html) is allocated first with an
+    /// errdefer, so if `el` fails partway the slice is freed — matching how
+    /// ztree's own constructors stay allocation-failure safe.
+    pub fn document(self: Html, attrs: anytype, children: anytype) !Node {
+        const roots = try self.allocator.alloc(Node, 2);
+        errdefer self.allocator.free(roots);
+
+        roots[0] = doctype;
+        roots[1] = try self.el("html", attrs, children);
+
+        return .{ .fragment = roots };
+    }
+};
 
 /// Write HTML for a ztree Node to a Zig 0.16 `std.Io.Writer`.
 ///
@@ -160,6 +208,96 @@ test "render — fixed writer reports WriteFailed when full" {
     var writer = Writer.fixed(&buffer);
 
     try testing.expectError(error.WriteFailed, render(ztree.text("hello"), &writer));
+}
+
+// -- allocator-bound builder --
+
+test "Html builder — document binds allocator once" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const h = init(arena.allocator());
+    const page = try h.document(.{ .lang = "en" }, .{
+        try h.el("head", .{}, .{
+            try h.el("meta", .{ .charset = "utf-8" }, .{}),
+            try h.el("meta", .{
+                .name = "viewport",
+                .content = "width=device-width, initial-scale=1",
+            }, .{}),
+            try h.el("title", .{}, .{ztree.text("Rwagasore")}),
+        }),
+        try h.el("body", .{}, .{
+            try h.el("h1", .{}, .{ztree.text("Rwagasore")}),
+            try h.el("p", .{}, .{ztree.text("Design studio taking on work of consequence.")}),
+        }),
+    });
+
+    const html = try renderToString(page);
+    defer testing.allocator.free(html);
+    try testing.expectEqualStrings(
+        "<!DOCTYPE html>" ++
+            "<html lang=\"en\">" ++
+            "<head>" ++
+            "<meta charset=\"utf-8\">" ++
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">" ++
+            "<title>Rwagasore</title>" ++
+            "</head>" ++
+            "<body>" ++
+            "<h1>Rwagasore</h1>" ++
+            "<p>Design studio taking on work of consequence.</p>" ++
+            "</body>" ++
+            "</html>",
+        html,
+    );
+}
+
+test "Html builder — fragment raw none and runtime attrs" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const h = init(arena.allocator());
+    const show = false;
+    const node = try h.fragment(.{
+        ztree.raw("<!-- trusted -->"),
+        try h.el("div", .{
+            ztree.attr("hx-post", "/api"),
+            if (show) ztree.attr("data-visible", "true") else null,
+        }, .{
+            ztree.text("A & B"),
+            ztree.none(),
+        }),
+    });
+
+    const html = try renderToString(node);
+    defer testing.allocator.free(html);
+    try testing.expectEqualStrings("<!-- trusted --><div hx-post=\"/api\">A &amp; B</div>", html);
+}
+
+// -- allocation-failure safety (parity with ztree's own constructors) --
+
+test "document — no leak with testing.allocator" {
+    const h = init(testing.allocator);
+    const page = try h.document(.{ .lang = "en" }, .{ztree.text("body")});
+    // Capture child pointers before freeing the roots slice that references them.
+    const html_el = page.fragment[1].element;
+    defer testing.allocator.free(html_el.children);
+    defer testing.allocator.free(html_el.attrs);
+    defer testing.allocator.free(page.fragment);
+}
+
+fn documentAllocFailureImpl(a: Allocator) !void {
+    const h = init(a);
+    // Non-allocating leaf child so the only allocations are document's own:
+    // the two-root fragment slice, the html attrs, and the html children.
+    const page = try h.document(.{ .lang = "en" }, .{ztree.text("body")});
+    const html_el = page.fragment[1].element;
+    defer a.free(html_el.children);
+    defer a.free(html_el.attrs);
+    defer a.free(page.fragment);
+}
+
+test "document handles allocation failures" {
+    try testing.checkAllAllocationFailures(testing.allocator, documentAllocFailureImpl, .{});
 }
 
 // -- text --
