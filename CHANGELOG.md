@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-07-06
+
 ### Other
 
 - Upgrade ztree dependency to v2.2.0 — inherits string→text child coercion in tuple children.
